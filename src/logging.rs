@@ -123,19 +123,19 @@ fn log_to_callback(level: Rs2LogSeverity) -> Result<(), LogError> {
     ) {
         if !message.is_null() {
             // Safety: message pointer is checked for null
-            let msg = get_full_log_message(message).unwrap_or_else(|e| {
-                log::error!("Failed to get full log message: {:?}", e);
-                LogMessage::default()
-            });
-            let severity = Rs2LogSeverity::from(severity);
-            // We set the target to `librealsense::<filepath>::<line_number>` to
-            // make the log message appear in the same line in the console output.
-            log::log!(
-                target: format!("librealsense::{}:{}", msg.filename, msg.line_number).as_str(),
-                severity.into(),
-                "{}",
-                msg.message
-            );
+            if let Ok(msg) = get_full_log_message(message) {
+                let severity = Rs2LogSeverity::from(severity);
+                // We set the target to `librealsense::<filepath>::<line_number>` to
+                // make the log message appear in the same line in the console output.
+                log::log!(
+                    target: format!("librealsense::{}:{}", msg.filename, msg.line_number).as_str(),
+                    severity.into(),
+                    "{}",
+                    msg.message
+                );
+            } else {
+                log::error!("Failed to get full log message.");
+            }
         }
     }
 
@@ -211,19 +211,15 @@ pub fn log_to_file(min_severity: Rs2LogSeverity, file_path: &str) -> Result<(), 
     std::fs::create_dir_all(dir).map_err(|e| LogError::CreateLogDirectoryFailed(e.to_string()))?;
 
     unsafe {
+        let filepath = CString::new(file_path).map_err(|_| {
+            LogError::LogToFileFailed(
+                Rs2Exception::InvalidValue,
+                "Failed to convert file path to CString.".to_string(),
+            )
+        })?;
+
         let mut err = std::ptr::null_mut::<sys::rs2_error>();
-        sys::rs2_log_to_file(
-            min_severity.into(),
-            CString::new(file_path)
-                .map_err(|_| {
-                    LogError::LogToFileFailed(
-                        Rs2Exception::InvalidValue,
-                        "Failed to convert file path to CString.".to_string(),
-                    )
-                })?
-                .as_ptr() as *const i8,
-            &mut err,
-        );
+        sys::rs2_log_to_file(min_severity.into(), filepath.as_ptr(), &mut err);
         check_rs2_error!(err, LogError::LogToFileFailed)?;
     }
     Ok(())
@@ -252,21 +248,6 @@ pub fn enable_rolling_log_file(max_size: u32) -> Result<(), LogError> {
         let mut err = std::ptr::null_mut::<sys::rs2_error>();
         sys::rs2_enable_rolling_log_file(max_size, &mut err);
         check_rs2_error!(err, LogError::EnableRollingLogFileFailed)?;
-    }
-    Ok(())
-}
-
-/// Add custom message into librealsense log.
-///
-/// # Arguments
-///
-/// * `severity` - The severity of the message.
-/// * `message` - The message to log.
-pub fn log(severity: Rs2LogSeverity, message: &str) -> Result<(), LogError> {
-    unsafe {
-        let mut err = std::ptr::null_mut::<sys::rs2_error>();
-        sys::rs2_log(severity.into(), message.as_ptr() as *const i8, &mut err);
-        check_rs2_error!(err, LogError::LogFailed)?;
     }
     Ok(())
 }
